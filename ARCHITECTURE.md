@@ -1,3 +1,5 @@
+> Historical architecture of the upstream Watch with Codex player. The current transcript cache, relay, and hosted MCP setup are documented in [README.md](README.md).
+
 # Architecture
 
 Watch with Codex is a single-page, event-driven watch-along. The architecture keeps the video page small and treats the existing Codex conversation as the assistant's memory, language interface, and reasoning context.

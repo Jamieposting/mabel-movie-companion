@@ -2,16 +2,16 @@ import type { Metadata } from 'next';
 import './globals.css';
 
 export const metadata: Metadata = {
-  title: 'Watch with GPT',
-  description: 'Watch the same video together with GPT.',
+  title: 'Mabel Movie Companion',
+  description: 'Share spoiler-safe subtitle context with your existing conversation.',
   openGraph: {
-    title: 'Watch with GPT',
+    title: 'Mabel Movie Companion',
     description: 'Watch something together.',
     type: 'website',
   },
   twitter: {
     card: 'summary',
-    title: 'Watch with GPT',
+    title: 'Mabel Movie Companion',
     description: 'Watch something together.',
   },
 };

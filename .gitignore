@@ -39,3 +39,14 @@ next-env.d.ts
 /outputs/
 /output/
 /work/
+
+# Local Site binding, transcripts, and watch sessions
+/.openai/hosting.json
+/.sites-runtime/
+/.dev.vars*
+*.vidiq.json
+*.srt
+*.vtt
+!tests/practice.srt
+/transcripts/
+/sessions/

@@ -9,6 +9,9 @@ import {
   useState,
 } from 'react';
 
+import ScenePanel, { type SceneReader, stamp } from './scene-panel';
+import { manualClock } from './manual-clock';
+
 const PRIMARY_REACTION_EMOJIS = ['😂', '❓', '💀', '😭', '❤️'] as const;
 const REACTION_EMOJIS = [
   ...PRIMARY_REACTION_EMOJIS,
@@ -38,9 +41,9 @@ const WATCH_PROTOCOL = {
   userIntent:
     'The user decides what kind of company they want. Follow their current request; watching together does not require a fixed amount of commentary or reactions.',
   observation:
-    'When the user asks you to actively watch, run every observation as one programmatic browser call: preselect the rendered .player-frame, await watch_observe_next_moment, capture that frame in the very next browser operation, and return the structured observation and image to the model together. Never yield to model reasoning between the WebMCP result and frame capture, and never invoke the observer as a standalone call during active watching. Repeat this paired operation in the same turn. Each observer resolves when the configured observation interval elapses or immediately when the user sends a live signal. A live signal interrupts the wait, not the watch-along: handle it and immediately continue observing while playback is active. Stop only when the user asks you to stop watching or playback pauses, ends, or becomes unavailable.',
+    'When asked to follow along, use watch_observe_next_moment while playback is active. With imported subtitles, use the returned scene and skip screen captures. Answer direct questions with watch_get_scene even when paused. End the loop on request or when playback stops.',
   behavior: [
-    'Stay quiet by default.',
+    'Read the scene.mode and scene.commentaryOpportunity fields. Answer direct questions at any time. For unsolicited remarks, wait for commentaryOpportunity and a meaningful moment. Use watch_get_scene for dialogue questions.',
     'Do not comment on every observation.',
     'Every viewer emoji is intentional input. Acknowledge it in context with a brief comment, answer, or reaction; do not end the watch-along after acknowledging it.',
     'Do not pause playback solely because the viewer sent an emoji.',
@@ -52,7 +55,7 @@ const WATCH_PROTOCOL = {
   reactions: REACTION_EMOJIS,
 } as const;
 
-type SourceKind = 'youtube' | 'direct' | 'embed';
+type SourceKind = 'manual' | 'youtube' | 'direct' | 'embed';
 type PlaybackStatus =
   | 'idle'
   | 'loading'
@@ -63,6 +66,7 @@ type PlaybackStatus =
   | 'unavailable';
 
 type VideoSource =
+  | { kind: 'manual'; url: string }
   | { kind: 'youtube'; url: string; videoId: string }
   | { kind: 'direct'; url: string }
   | { kind: 'embed'; url: string };
@@ -90,6 +94,8 @@ type PlaybackSnapshot = {
 };
 
 type PlayerController = {
+  read: () => number | null;
+  seek: (time: number) => void;
   play: () => Promise<boolean>;
   pause: () => Promise<boolean>;
 };
@@ -154,6 +160,7 @@ type ModelContext = {
 };
 
 type YouTubePlayer = {
+  seekTo: (time: number, allowSeekAhead: boolean) => void;
   playVideo: () => void;
   pauseVideo: () => void;
   getCurrentTime: () => number;
@@ -310,7 +317,7 @@ function parseVideoSource(value: string): VideoSource {
   }
 
   if (url.origin === window.location.origin) {
-    throw new Error('Paste a video URL, not the Watch with GPT site URL.');
+    throw new Error('Paste a video URL, not the Mabel Movie Companion site URL.');
   }
 
   const hostname = url.hostname.toLowerCase();
@@ -423,7 +430,7 @@ function YouTubeSurface({
           onPlayback({
             status: youtubeStatus(player.getPlayerState()),
             currentTime: finiteTime(player.getCurrentTime()),
-            duration: finiteTime(player.getDuration()),
+            duration: player.getDuration(),
             controllable: true,
           });
         };
@@ -442,6 +449,8 @@ function YouTubeSurface({
             onReady: (event) => {
               player = event.target;
               controllerRef.current = {
+                read: () => player?.getCurrentTime() ?? null,
+                seek: time => player?.seekTo(time, true),
                 play: async () => {
                   player?.playVideo();
                   return true;
@@ -510,6 +519,8 @@ function DirectVideoSurface({
 
   useEffect(() => {
     controllerRef.current = {
+      read: () => videoRef.current && videoRef.current.readyState >= 1 && !videoRef.current.error ? videoRef.current.currentTime : null,
+      seek: time => { if (videoRef.current && videoRef.current.readyState >= 1) videoRef.current.currentTime = time; },
       play: async () => {
         const video = videoRef.current;
         if (!video) return false;
@@ -545,6 +556,8 @@ function DirectVideoSurface({
       onEnded={report}
       onPause={report}
       onPlay={report}
+      onSeeked={report}
+      onSeeking={report}
       onTimeUpdate={report}
     />
   );
@@ -581,6 +594,8 @@ function PlayerSurface({
     );
   }
 
+  if (source.kind === 'manual') return <ExternalScreen controllerRef={controllerRef} onPlayback={onPlayback} />;
+
   if (source.kind === 'direct') {
     return (
       <DirectVideoSurface
@@ -602,6 +617,30 @@ function PlayerSurface({
   );
 }
 
+function ExternalScreen({ controllerRef, onPlayback }: {
+  controllerRef: MutableRefObject<PlayerController | null>;
+  onPlayback: (snapshot: Partial<PlaybackSnapshot>) => void;
+}) {
+  const [clock] = useState(() => manualClock());
+  const [time, setTime] = useState(0);
+  useEffect(() => {
+    const report = () => {
+      const t = clock.read(); setTime(t);
+      onPlayback({currentTime:t, status:clock.playing() ? 'playing' : 'paused', controllable:true});
+    };
+    controllerRef.current = {
+      read: clock.read,
+      play: async () => {clock.play(); report(); return true;},
+      pause: async () => {clock.pause(); report(); return true;},
+      seek: t => {clock.seek(t); report();},
+    };
+    report();
+    const timer = window.setInterval(report, 200);
+    return () => { window.clearInterval(timer); controllerRef.current = null; };
+  }, [clock, controllerRef, onPlayback]);
+  return <div className="external-clock"><span>External screen</span><strong>{stamp(time)}</strong></div>;
+}
+
 export default function Home() {
   const [videoUrl, setVideoUrl] = useState('');
   const [source, setSource] = useState<VideoSource | null>(null);
@@ -617,6 +656,8 @@ export default function Home() {
   const mediaMetadataRef = useRef(mediaMetadata);
   const observationIntervalRef = useRef(observationIntervalSeconds);
   const controllerRef = useRef<PlayerController | null>(null);
+  const sceneReader = useRef<SceneReader | null>(null);
+  const readTime = useCallback(() => controllerRef.current?.read() ?? null, []);
   const reactionSequenceRef = useRef(0);
   const signalSequenceRef = useRef(0);
   const mediaSessionSequenceRef = useRef(0);
@@ -881,12 +922,21 @@ export default function Home() {
   );
 
   useEffect(() => {
-    const modelContext = document.modelContext;
+    const modelContext = document.modelContext ?? (navigator as Navigator & {modelContext?: ModelContext}).modelContext;
     if (!modelContext?.registerTool) {
       document.documentElement.dataset.siteTools = 'unavailable';
       return;
     }
 
+    const getScene = (input?: unknown) => {
+      if (input && typeof input === 'object' && 'before' in input) {
+        const index = input.before;
+        if (typeof index !== 'number' || !Number.isSafeInteger(index) || index < 0)
+          return {ok:false, reason:'before must be a nonnegative integer'};
+        return sceneReader.current?.(index,true) ?? {ok:false, reason:'No scene selected'};
+      }
+      return sceneReader.current?.(undefined,true) ?? {ok:false, reason:'No scene selected'};
+    };
     const noInputSchema = {
       type: 'object',
       properties: {},
@@ -895,6 +945,13 @@ export default function Home() {
 
     const tools: WebMcpTool[] = [
       {
+        name: 'watch_get_scene',
+        description: 'Read completed dialogue and current position in this tab. For earlier completed dialogue pass the previous result’s earlierBefore as before. Use this for questions even while paused.',
+        inputSchema: {type:'object',properties:{before:{type:'integer',minimum:0}},additionalProperties:false},
+        annotations: {readOnlyHint:true},
+        execute: async args => getScene(args),
+      },
+      {
         name: 'watch_get_session',
         description:
           'Read the current shared-video state, session-level media metadata, and viewing protocol. Call this before starting a watch-along. The user’s current request determines the interaction style; do not assume they want constant commentary.',
@@ -902,6 +959,7 @@ export default function Home() {
         annotations: { readOnlyHint: true },
         execute: async () => ({
           ok: true,
+          scene: sceneReader.current?.(undefined,true),
           media: mediaMetadataRef.current,
           playback: publicPlaybackState(playbackRef.current),
           protocol: {
@@ -914,15 +972,14 @@ export default function Home() {
               'watch_get_session returns session-level media identity once. Observations repeat only mediaSessionId and sourceId alongside timing fields.',
             liveSignals:
               'Any viewer emoji wakes watch_observe_next_moment immediately. It is intentional input inside the active watch-along, never an implicit request to pause or stop. Acknowledge it from the returned emoji, visible frame, and conversation context, then continue observing in the same turn while playback remains active.',
-            visualCapture:
-              'Use one programmatic browser call for the complete operation: preselect .player-frame, await watch_observe_next_moment, capture the rendered frame in the very next browser operation, and return the observation and image together. Do not invoke the observer as a standalone call and do not yield to model reasoning between the WebMCP result and capture. The frame includes the video, captions, and player overlays.',
+            visualCapture: 'Optional for visual questions. Use the timed scene for dialogue.',
           },
         }),
       },
       {
         name: 'watch_observe_next_moment',
         description:
-          'Continue an active watch-along on a persistent media-time cursor. IMPORTANT: during active watching, never invoke this observer as a standalone call. Use one programmatic browser call that preselects the rendered .player-frame, awaits this WebMCP tool, captures that frame in the very next browser operation, and returns the structured observation and image to the model together. There must be zero model-reasoning turns between observer resolution and frame capture. The observer returns at the next scheduled checkpoint or immediately for any viewer emoji. At scheduled checkpoints, use the paired frame and conversation to decide whether to stay quiet, react, or comment. For a viewer emoji, always acknowledge the intentional signal in context, do not pause or end the watch-along solely because of it, and repeat the same paired observe-and-capture operation while playback remains active.',
+          'Follow an active video until the next media-time checkpoint or viewer reaction. Read the returned subtitle scene and commentaryOpportunity. Continue while active watching is requested. Call watch_get_scene for questions while paused.',
         inputSchema: noInputSchema,
         annotations: { readOnlyHint: true },
         execute: async () => {
@@ -1040,6 +1097,7 @@ export default function Home() {
 
           return {
             ok: true,
+            scene: sceneReader.current?.(undefined,true),
             observation: {
               id: observationId,
               capturedAt,
@@ -1060,26 +1118,7 @@ export default function Home() {
               mediaSessionId: mediaMetadataRef.current?.sessionId ?? null,
               sourceId: mediaMetadataRef.current?.sourceId ?? null,
               playback: publicPlaybackState(current),
-              visualCapture: {
-                source: 'browser page observation',
-                targetSelector: '.player-frame',
-                includes: ['video', 'captions', 'player overlays'],
-                requiredBeforeReasoning: true,
-                orchestration: 'same programmatic browser call',
-                returnWithObservation: true,
-                interveningModelTurns: 0,
-                sequence: [
-                  'await watch_observe_next_moment',
-                  'capture .player-frame in the next browser operation',
-                  'return the structured observation and image together',
-                ],
-              },
-              visualInstruction:
-                'This observation is incomplete without its paired frame. The same browser program that awaited this result must capture the rendered .player-frame in its very next operation and return the structured observation and image together. Do not yield to model reasoning between this result and the capture. Only then use the frame, wake reason, optional user signal, and conversation context to decide whether to stay quiet, react, or respond.',
-              continuationInstruction:
-                wake.reason === 'user_signal'
-                  ? 'This viewer signal is part of the ongoing watch-along, not a stop or pause request. After the paired frame is captured, acknowledge the signal in context, keep playback running, and immediately repeat the same one-program observe-and-capture operation in this turn. Stop only if the user explicitly asks you to stop watching or playback is no longer active.'
-                  : 'If the user still wants active watching and playback remains active, immediately repeat the same one-program observe-and-capture operation in this turn. Stop only if the user asks you to stop watching or playback is no longer active.',
+              continuationInstruction: 'Use scene for dialogue. Stay quiet unless the user asks or scene.commentaryOpportunity is true. If active watching is requested, observe again while playback continues.',
             },
           };
         },
@@ -1214,10 +1253,22 @@ export default function Home() {
     };
   }, [publishVisualReactions, releaseObservation, waitForObservationWake]);
 
+  useEffect(() => {
+    const id = new URLSearchParams(location.search).get('watch');
+    if (id && /^[\w-]{11}$/.test(id)) {
+      openSource({kind:'youtube',url:'https://www.youtube.com/watch?v='+id,videoId:id});
+      history.replaceState(null,'',location.pathname);
+    }
+  }, []);
+
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    try { openSource(parseVideoSource(videoUrl)); }
+    catch (err) { setError((err as Error).message); }
+  }
+
+  function openSource(parsedSource: VideoSource) {
     try {
-      const parsedSource = parseVideoSource(videoUrl);
       const sessionId = `media-${Date.now()}-${mediaSessionSequenceRef.current++}`;
       const nextMetadata = initialMediaMetadata(parsedSource, sessionId);
       const nextPlayback: PlaybackSnapshot = {
@@ -1246,6 +1297,7 @@ export default function Home() {
   }
 
   function reset() {
+    if (source?.url.startsWith('blob:')) URL.revokeObjectURL(source.url);
     controllerRef.current = null;
     pendingSignalsRef.current = [];
     releaseObservation({ reason: 'cancelled' });
@@ -1266,8 +1318,8 @@ export default function Home() {
     return (
       <main className="start-screen">
         <section className="start-content" aria-labelledby="page-title">
-          <p className="eyebrow">Watch with GPT</p>
-          <h1 id="page-title">Watch something together.</h1>
+          <p className="eyebrow">Mabel Movie Companion</p>
+          <h1 id="page-title">What are we watching?</h1>
           <form className="link-form" onSubmit={submit}>
             <label className="sr-only" htmlFor="video-url">
               Video link
@@ -1279,7 +1331,7 @@ export default function Home() {
               onChange={(event) => setVideoUrl(event.target.value)}
               placeholder="Paste a video link"
               autoComplete="url"
-              autoFocus
+
               aria-describedby={error ? 'video-error' : 'video-support'}
               aria-invalid={Boolean(error)}
               required
@@ -1288,6 +1340,9 @@ export default function Home() {
               <span aria-hidden="true">→</span>
             </button>
           </form>
+          <p>For YouTube captions, send the link to Mabel in your watch-along chat first.</p>
+          <div className="source-options"><button onClick={()=>openSource({kind:'manual',url:'manual://external-screen'})}>Watch on another screen</button>
+            <label>Open local video<input type="file" accept="video/*" onChange={e=>{const f=e.target.files?.[0]; if(f) {openSource({kind:'direct',url:URL.createObjectURL(f)}); setMediaMetadata(m => m ? {...m,title:f.name} : m);}}}/></label></div>
           {error ? (
             <p className="input-message input-error" id="video-error" role="alert">
               {error}
@@ -1306,7 +1361,7 @@ export default function Home() {
     <main className="watch-screen">
       <header className="watch-header">
         <button type="button" className="wordmark" onClick={reset}>
-          Watch with GPT
+          Mabel Movie Companion
         </button>
         <button type="button" className="change-video" onClick={reset}>
           Change video
@@ -1334,6 +1389,9 @@ export default function Home() {
           </div>
         </div>
 
+        <ScenePanel key={source.url} youtubeId={source.kind==='youtube'?source.videoId:undefined} duration={()=>playbackRef.current.duration} title={mediaMetadata?.title || (source.kind === 'manual' ? 'Untitled film' : 'Shared video')} reader={sceneReader} readTime={readTime}
+          seek={t => controllerRef.current?.seek(t)} toggle={()=>{const c=controllerRef.current; if(c) void (playbackStatus==='playing'?c.pause():c.play());}}
+          playing={playbackStatus==='playing'} manual={source.kind==='manual'} />
         <div className="watch-controls">
           <div className="reaction-picker-shell" ref={reactionMenuRef}>
             <div className="reaction-picker" aria-label="React to this moment">
