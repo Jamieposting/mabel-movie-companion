@@ -123,8 +123,8 @@ export default function ScenePanel({ playbackState, visual, youtubeId, duration,
         <dt>Dialogue available</dt><dd>{current.completed} completed cues</dd>
         <dt>Commentary mode</dt><dd>{style}</dd>
         <dt>Local visual observation</dt><dd>{!visual ? 'Sharing off' : frame ? 'Player region ready for host capture' : 'Waiting for a visible player and settled clock'}</dd>
-        <dt>Latest valid screenshot time</dt><dd>Unknown · captures occur in the browser host</dd>
-        <dt>Image delivered to ChatGPT</dt><dd>Unconfirmed · the live scene relay carries text only</dd>
+        <dt>Latest valid screenshot time</dt><dd>See the paused screenshot panel for confirmed crop time and age</dd>
+        <dt>Image delivered to ChatGPT</dt><dd>See the frame retrieval status. Dialogue reads carry text only.</dd>
         <dt>Synchronization or capture issue</dt><dd>{playbackState === 'unavailable' ? 'Player unavailable' : time === null ? 'No confirmed clock' : visual && !frame ? 'Capture checkpoint unavailable' : 'None reported by player'}</dd>
       </dl>
     </details>

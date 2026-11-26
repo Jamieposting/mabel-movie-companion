@@ -9,6 +9,7 @@ import {
   useState,
 } from 'react';
 
+import PausedFrame from './paused-frame';
 import {youtubeClock} from './youtube-clock';
 import {playerClip, type FrameCheckpoint} from './visual-observation';
 import ScenePanel, { type SceneReader, stamp } from './scene-panel';
@@ -710,6 +711,15 @@ export default function Home() {
   const framesAllowed=useRef(false);
   const pendingSeek=useRef<number|null>(null);
   const playerFrame=useRef<HTMLDivElement>(null);
+  const pausedTarget=useCallback(()=>playerFrame.current,[]);
+  const readPaused=useCallback(()=>{
+    const session=mediaMetadataRef.current?.sessionId;
+    const visual=controllerRef.current?.visual?.();
+    const scene=sceneReader.current?.() as {positionSeconds?:number}|undefined;
+    if(!framesAllowed.current || !session || visual?.status!=='paused' || typeof scene?.positionSeconds!=='number' ||
+       !Number.isFinite(scene.positionSeconds) || pendingSeek.current!==null) return null;
+    return {session,epoch:playbackDiscontinuitySequenceRef.current,rate:visual.rate,time:scene.positionSeconds,scene};
+  },[]);
   const checkpoint=useCallback((scene:unknown):FrameCheckpoint|null=>{
     const position=(scene as {positionSeconds?:number|null} | null)?.positionSeconds;
     const session=mediaMetadataRef.current?.sessionId;
@@ -1468,6 +1478,7 @@ export default function Home() {
         {(source.kind==='youtube' || source.kind==='direct') && <label><input type="checkbox" checked={framesEnabled} onChange={e=>{
           framesAllowed.current=e.target.checked;setFramesEnabled(e.target.checked);playbackDiscontinuitySequenceRef.current++;
         }}/> Share player frames with this browser companion (experimental)</label>}
+        {framesEnabled && <PausedFrame key={source.url} read={readPaused} target={pausedTarget} />}
         <ScenePanel playbackState={playbackStatus} visual={framesEnabled?checkpoint:undefined} key={source.url} youtubeId={source.kind==='youtube'?source.videoId:undefined} duration={()=>playbackRef.current.duration} title={mediaMetadata?.title || (source.kind === 'manual' ? 'Untitled film' : 'Shared video')} reader={sceneReader} canControl={()=>controllerRef.current!==null} readTime={readTime}
           seek={seekPlayer} toggle={()=>{const c=controllerRef.current; if(c) void (playbackStatus==='playing'?c.pause():c.play());}}
           playing={playbackStatus==='playing'} manual={source.kind==='manual'} />
