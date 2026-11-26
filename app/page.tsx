@@ -9,6 +9,7 @@ import {
   useState,
 } from 'react';
 
+import {youtubeClock} from './youtube-clock';
 import {playerClip, type FrameCheckpoint} from './visual-observation';
 import ScenePanel, { type SceneReader, stamp } from './scene-panel';
 import { manualClock } from './manual-clock';
@@ -181,7 +182,7 @@ type YouTubeNamespace = {
       events: {
         onReady: (event: { target: YouTubePlayer }) => void;
         onStateChange: () => void;
-        onError: () => void;
+        onError: (event:{data:number}) => void;
       };
     },
   ) => YouTubePlayer;
@@ -395,7 +396,14 @@ function loadYouTubeApi() {
     }
   });
 
-  return youtubeApiPromise;
+  const attempt=youtubeApiPromise;
+  void attempt.catch(()=>{
+    if (youtubeApiPromise===attempt) {
+      youtubeApiPromise=null;
+      document.querySelector('script[data-youtube-iframe-api]')?.remove();
+    }
+  });
+  return attempt;
 }
 
 function youtubeStatus(state: number): PlaybackStatus {
@@ -416,29 +424,36 @@ function YouTubeSurface({
   onPlayback: (snapshot: Partial<PlaybackSnapshot>) => void;
 }) {
   const hostRef = useRef<HTMLDivElement>(null);
+  const [playerError,setPlayerError]=useState('');
 
   useEffect(() => {
     let disposed = false;
     let player: YouTubePlayer | null = null;
     let intervalId: number | null = null;
 
-    onPlayback({ status: 'loading', controllable: false });
+    const clock=youtubeClock();
+    let failed=false;
+    onPlayback({ status: 'loading', controllable: false, currentTime:null });
 
     void loadYouTubeApi()
       .then((youtube) => {
         if (disposed || !hostRef.current) return;
 
         const report = () => {
-          if (!player || disposed) return;
+          if (!player || disposed || failed) return;
+          const state = player.getPlayerState();
           onPlayback({
-            status: youtubeStatus(player.getPlayerState()),
-            currentTime: finiteTime(player.getCurrentTime()),
+            status: youtubeStatus(state),
+            currentTime: clock.read(player.getCurrentTime(),state),
             duration: player.getDuration(),
             controllable: true,
           });
         };
 
-        player = new youtube.Player(hostRef.current, {
+        // The API replaces this child with an iframe. Keep the React-owned host attached.
+        const mount=document.createElement('div');
+        hostRef.current.replaceChildren(mount);
+        player = new youtube.Player(mount, {
           videoId: source.videoId,
           playerVars: {
             autoplay: 0,
@@ -450,15 +465,21 @@ function YouTubeSurface({
           },
           events: {
             onReady: (event) => {
+              if (disposed || failed) return;
               player = event.target;
               controllerRef.current = {
-                read: () => player?.getCurrentTime() ?? null,
+                read: () => player ? clock.read(player.getCurrentTime(),player.getPlayerState()) : null,
                 visual: () => {
                   if (!player) return null;
                   const status=youtubeStatus(player.getPlayerState());
                   return {status,rate:player.getPlaybackRate()};
                 },
-                seek: time => player?.seekTo(time, true),
+                seek: time => {
+                  if (!player || failed) return;
+                  const target=clock.seek(player.getCurrentTime(),time,player.getDuration());
+                  player.seekTo(target,true);
+                  report();
+                },
                 play: async () => {
                   player?.playVideo();
                   return true;
@@ -472,15 +493,21 @@ function YouTubeSurface({
               intervalId = window.setInterval(report, 250);
             },
             onStateChange: report,
-            onError: () => {
-              onPlayback({ status: 'unavailable', controllable: false });
+            onError: ({data}) => {
+              if (disposed) return;
+              failed=true;
+              clock.fail();
+              controllerRef.current=null;
+              setPlayerError('YouTube playback error '+data+'.');
+              onPlayback({status:'unavailable',controllable:false,currentTime:null});
             },
           },
         });
       })
       .catch(() => {
         if (!disposed) {
-          onPlayback({ status: 'unavailable', controllable: false });
+          setPlayerError('The YouTube player could not initialise.');
+          onPlayback({ status: 'unavailable', controllable: false,currentTime:null });
         }
       });
 
@@ -492,7 +519,7 @@ function YouTubeSurface({
     };
   }, [controllerRef, onPlayback, source.videoId]);
 
-  return <div className="youtube-host" ref={hostRef} />;
+  return <><div className="youtube-host" ref={hostRef} />{playerError && <p role="alert" className="youtube-error">{playerError}</p>}</>;
 }
 
 function DirectVideoSurface({
@@ -599,7 +626,7 @@ function PlayerSurface({
 
   if (source.kind === 'youtube') {
     return (
-      <YouTubeSurface
+      <YouTubeSurface key={source.videoId}
         source={source}
         controllerRef={controllerRef}
         onPlayback={onPlayback}
@@ -699,7 +726,8 @@ export default function Home() {
   },[]);
   function seekPlayer(seconds:number) {
     playbackDiscontinuitySequenceRef.current++;
-    pendingSeek.current=seconds;
+    // YouTube manages its own acknowledgement in the shared iframe clock.
+    pendingSeek.current=playbackRef.current.sourceKind==='youtube'?null:seconds;
     controllerRef.current?.seek(seconds);
   }
   const reactionMenuRef = useRef<HTMLDivElement>(null);
@@ -1440,7 +1468,7 @@ export default function Home() {
         {(source.kind==='youtube' || source.kind==='direct') && <label><input type="checkbox" checked={framesEnabled} onChange={e=>{
           framesAllowed.current=e.target.checked;setFramesEnabled(e.target.checked);playbackDiscontinuitySequenceRef.current++;
         }}/> Share player frames with this browser companion (experimental)</label>}
-        <ScenePanel visual={framesEnabled?checkpoint:undefined} key={source.url} youtubeId={source.kind==='youtube'?source.videoId:undefined} duration={()=>playbackRef.current.duration} title={mediaMetadata?.title || (source.kind === 'manual' ? 'Untitled film' : 'Shared video')} reader={sceneReader} readTime={readTime}
+        <ScenePanel visual={framesEnabled?checkpoint:undefined} key={source.url} youtubeId={source.kind==='youtube'?source.videoId:undefined} duration={()=>playbackRef.current.duration} title={mediaMetadata?.title || (source.kind === 'manual' ? 'Untitled film' : 'Shared video')} reader={sceneReader} canControl={()=>controllerRef.current!==null} readTime={readTime}
           seek={seekPlayer} toggle={()=>{const c=controllerRef.current; if(c) void (playbackStatus==='playing'?c.pause():c.play());}}
           playing={playbackStatus==='playing'} manual={source.kind==='manual'} />
         <div className="watch-controls">
@@ -1532,7 +1560,7 @@ export default function Home() {
           </p>
         ) : (
           <p className="player-note" data-playback-status={playbackStatus}>
-            {playbackStatus === 'playing' ? 'Playing together' : 'Ready when you are'}
+            {playbackStatus === 'playing' ? 'Playing together' : playbackStatus === 'loading' ? 'Waiting for the player…' : playbackStatus === 'unavailable' ? 'Player unavailable' : 'Ready when you are'}
           </p>
         )}
       </section>

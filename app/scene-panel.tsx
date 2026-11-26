@@ -9,12 +9,12 @@ export type SceneReader = (before?: number, tool?: boolean) => unknown;
 type Props = {
   visual?: (scene:unknown)=>unknown;
   youtubeId?: string; duration: () => number|null;
-  readTime: () => number | null; seek: (t: number) => void; toggle: () => void;
+  canControl: () => boolean; readTime: () => number | null; seek: (t: number) => void; toggle: () => void;
   playing: boolean; manual: boolean; title: string; reader: MutableRefObject<SceneReader | null>;
 };
 export function stamp(t: number) { return new Date(Math.floor(t % 86400) * 1000).toISOString().slice(11,19); }
 const sample = '1\n00:00:00,000 --> 00:00:02,000\nI left the brass key in the biscuit tin.\n\n2\n00:00:09,000 --> 00:00:11,000\nThe spare is under the red clock.';
-export default function ScenePanel({ visual, youtubeId, duration, readTime, seek, toggle, playing, manual, title, reader }: Props) {
+export default function ScenePanel({ visual, youtubeId, duration, canControl, readTime, seek, toggle, playing, manual, title, reader }: Props) {
   const [film, setFilm] = useState('');
   const [cues, setCues] = useState<Cue[]>([]);
   const [offset, setOffset] = useState(0);
@@ -114,8 +114,8 @@ export default function ScenePanel({ visual, youtubeId, duration, readTime, seek
     <label>Subtitle delay (seconds)<input type="number" step="0.1" value={offset} onChange={e=>setOffset(fromVidIQ ? Math.max(0,Number(e.target.value)||0) : Number(e.target.value)||0)} /></label>
     <label>Commentary<select value={style} onChange={e=>setStyle(e.target.value as Style)}>{['Quiet Companion','Occasional Commentary','Chatty Companion'].map(x=><option key={x}>{x}</option>)}</select></label></div>
     <p>{manual ? 'External screen · Start and pause this clock with your film.' : 'Player clock · Follows the video’s own timeline.'} Positive delay moves dialogue later.</p>
-    <div className="transport"><button disabled={time===null} onClick={toggle}>{playing?'Pause':'Play'}</button><button disabled={time===null} onClick={()=>seek(Math.max(0,(time??0)-10))}>−10 s</button><button disabled={time===null} onClick={()=>seek((time??0)+10)}>+10 s</button>
-    <label>Go to <input aria-label="Go to time" value={jump} onChange={e=>setJump(e.target.value)}/></label><button disabled={time===null} onClick={()=>{if (/^(?:\d+:)?[0-5]?\d:[0-5]\d$/.test(jump)) seek(jump.split(':').reduce((s,x)=>60*s+Number(x),0)); else setNote('Enter mm:ss or hh:mm:ss.');}}>Seek</button></div>
+    <div className="transport"><button disabled={!canControl()} onClick={toggle}>{playing?'Pause':'Play'}</button><button disabled={time===null} onClick={()=>seek(Math.max(0,(time??0)-10))}>−10 s</button><button disabled={time===null} onClick={()=>seek((time??0)+10)}>+10 s</button>
+    <label>Go to <input aria-label="Go to time" value={jump} onChange={e=>setJump(e.target.value)}/></label><button disabled={!canControl()} onClick={()=>{if (/^(?:\d+:)?[0-5]?\d:[0-5]\d$/.test(jump)) seek(jump.split(':').reduce((s,x)=>60*s+Number(x),0)); else setNote('Enter mm:ss or hh:mm:ss.');}}>Seek</button></div>
     <p role="status">{note} {cues.length ? ' · '+current.completed+(current.completed===1?' completed cue':' completed cues') : ' · No subtitles loaded'}</p>
     <blockquote>{current.dialogue.at(-1)?.line ?? 'Completed dialogue will appear here.'}</blockquote>
     {visual && <details><summary>Browser frame checkpoint</summary>

@@ -501,3 +501,5 @@ button:disabled {opacity:.55;}
 .live-switch button {padding:.7rem 1rem;background:#d6eacb;color:#17221a;border:0;border-radius:.55rem;cursor:pointer;}
 .live-switch p {margin-bottom:0;}
 .yt-import{margin:1rem 0}.yt-import button{padding:.6rem .9rem;border:1px solid #657e6a;background:#26372e;border-radius:.5rem}.yt-import a{color:#cde5be}.yt-import textarea{display:block;margin:.7rem 0}
+
+.youtube-error { position: absolute; inset: auto 1rem 1rem; color: white; background: #181818; padding: .5rem; }
