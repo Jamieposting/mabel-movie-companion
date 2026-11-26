@@ -7,6 +7,7 @@ import { inCommentaryGap, parseSubtitles, scene, type Cue, type Style } from './
 
 export type SceneReader = (before?: number, tool?: boolean) => unknown;
 type Props = {
+  playbackState: string;
   visual?: (scene:unknown)=>unknown;
   youtubeId?: string; duration: () => number|null;
   canControl: () => boolean; readTime: () => number | null; seek: (t: number) => void; toggle: () => void;
@@ -14,7 +15,7 @@ type Props = {
 };
 export function stamp(t: number) { return new Date(Math.floor(t % 86400) * 1000).toISOString().slice(11,19); }
 const sample = '1\n00:00:00,000 --> 00:00:02,000\nI left the brass key in the biscuit tin.\n\n2\n00:00:09,000 --> 00:00:11,000\nThe spare is under the red clock.';
-export default function ScenePanel({ visual, youtubeId, duration, canControl, readTime, seek, toggle, playing, manual, title, reader: readerRef }: Props) {
+export default function ScenePanel({ playbackState, visual, youtubeId, duration, canControl, readTime, seek, toggle, playing, manual, title, reader: readerRef }: Props) {
   const [film, setFilm] = useState('');
   const [cues, setCues] = useState<Cue[]>([]);
   const [offset, setOffset] = useState(0);
@@ -110,8 +111,23 @@ export default function ScenePanel({ visual, youtubeId, duration, canControl, re
     } catch (e) { if (id === generation.current) setNote((e as Error).message); }
   }
   const bridge = typeof document === 'undefined' ? '' : document.documentElement.dataset.siteTools;
+  const frame = visual?.(current) ?? null;
   return <section className="scene-panel" aria-label="Subtitle companion">
     <div className="panel-head"><h2>Scene companion</h2><output>{time === null ? 'Clock unavailable' : stamp(time)}</output></div>
+    <details><summary>Playback diagnostics</summary>
+      <dl>
+        <dt>Video</dt><dd>{current.film}</dd>
+        <dt>Player state</dt><dd>{playbackState}</dd>
+        <dt>Confirmed media time</dt><dd>{time === null ? 'Unavailable' : time.toFixed(2)+' s'}</dd>
+        <dt>Transcript</dt><dd>{cues.length ? 'Loaded' : note || (youtubeId ? 'Checking private cache' : 'Awaiting subtitles')}</dd>
+        <dt>Dialogue available</dt><dd>{current.completed} completed cues</dd>
+        <dt>Commentary mode</dt><dd>{style}</dd>
+        <dt>Local visual observation</dt><dd>{!visual ? 'Sharing off' : frame ? 'Player region ready for host capture' : 'Waiting for a visible player and settled clock'}</dd>
+        <dt>Latest valid screenshot time</dt><dd>Unknown · captures occur in the browser host</dd>
+        <dt>Image delivered to ChatGPT</dt><dd>Unconfirmed · the live scene relay carries text only</dd>
+        <dt>Synchronization or capture issue</dt><dd>{playbackState === 'unavailable' ? 'Player unavailable' : time === null ? 'No confirmed clock' : visual && !frame ? 'Capture checkpoint unavailable' : 'None reported by player'}</dd>
+      </dl>
+    </details>
     <div className="fields"><label>Film title<input value={film} placeholder={title} onChange={e=>setFilm(e.target.value)} /></label>
     <label>{youtubeId ? 'Subtitle or vidIQ file' : 'Subtitle file'}<input type="file" accept={youtubeId ? '.srt,.vtt,.json' : '.srt,.vtt'} onChange={e=>{void load(e.target.files?.[0]); e.target.value='';}} /></label>
     <label>Subtitle delay (seconds)<input type="number" step="0.1" value={offset} onChange={e=>setOffset(fromVidIQ ? Math.max(0,Number(e.target.value)||0) : Number(e.target.value)||0)} /></label>
@@ -122,7 +138,7 @@ export default function ScenePanel({ visual, youtubeId, duration, canControl, re
     <p role="status">{note} {cues.length ? ' · '+current.completed+(current.completed===1?' completed cue':' completed cues') : ' · No subtitles loaded'}</p>
     <blockquote>{current.dialogue.at(-1)?.line ?? 'Completed dialogue will appear here.'}</blockquote>
     {visual && <details><summary>Browser frame checkpoint</summary>
-      <textarea readOnly aria-label="Browser frame checkpoint" value={JSON.stringify({scene:current,frame:visual(current)})} />
+      <textarea readOnly aria-label="Browser frame checkpoint" value={JSON.stringify({scene:current,frame})} />
     </details>}
     <LiveSwitch reader={readerRef} />
     <p>{lastRead ? 'A host tool read scene context at '+lastRead+'.' : bridge==='ready' ? 'Site tools available. Waiting for a host to read this scene.' : 'You can also share a scene manually.'}</p>

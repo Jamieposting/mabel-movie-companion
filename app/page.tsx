@@ -1468,7 +1468,7 @@ export default function Home() {
         {(source.kind==='youtube' || source.kind==='direct') && <label><input type="checkbox" checked={framesEnabled} onChange={e=>{
           framesAllowed.current=e.target.checked;setFramesEnabled(e.target.checked);playbackDiscontinuitySequenceRef.current++;
         }}/> Share player frames with this browser companion (experimental)</label>}
-        <ScenePanel visual={framesEnabled?checkpoint:undefined} key={source.url} youtubeId={source.kind==='youtube'?source.videoId:undefined} duration={()=>playbackRef.current.duration} title={mediaMetadata?.title || (source.kind === 'manual' ? 'Untitled film' : 'Shared video')} reader={sceneReader} canControl={()=>controllerRef.current!==null} readTime={readTime}
+        <ScenePanel playbackState={playbackStatus} visual={framesEnabled?checkpoint:undefined} key={source.url} youtubeId={source.kind==='youtube'?source.videoId:undefined} duration={()=>playbackRef.current.duration} title={mediaMetadata?.title || (source.kind === 'manual' ? 'Untitled film' : 'Shared video')} reader={sceneReader} canControl={()=>controllerRef.current!==null} readTime={readTime}
           seek={seekPlayer} toggle={()=>{const c=controllerRef.current; if(c) void (playbackStatus==='playing'?c.pause():c.play());}}
           playing={playbackStatus==='playing'} manual={source.kind==='manual'} />
         <div className="watch-controls">
