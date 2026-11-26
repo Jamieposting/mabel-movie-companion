@@ -1,5 +1,7 @@
 'use client';
-import {useEffect,useRef,useState} from 'react';
+import Link from 'next/link';
+import {useSearchParams} from 'next/navigation';
+import {Suspense,useEffect,useRef,useState} from 'react';
 import type {Cue} from '../subtitles';
 
 function videoId(input:string) {
@@ -17,7 +19,14 @@ function validCues(data:unknown):data is Cue[]{
   return Array.isArray(data) && data.length>0 && data.length<=100000 && data.every(c=>c && Number.isFinite(c.start) && c.start>=0 && Number.isFinite(c.end) && c.end>c.start && typeof c.text==='string');
 }
 export default function Extractor() {
-  const [input,setInput]=useState('');
+  return <Suspense><ExtractorForm /></Suspense>;
+}
+function ExtractorForm() {
+  const params=useSearchParams();
+  const [input,setInput]=useState(()=>{
+    const initial=params.get('v');
+    return initial && /^[\w-]{11}$/.test(initial) ? 'https://www.youtube.com/watch?v='+initial : '';
+  });
   const [id,setId]=useState('');
   const [cues,setCues]=useState<Cue[]>([]);
   const [status,setStatus]=useState('');
@@ -31,8 +40,6 @@ export default function Extractor() {
     fetch('/capture-transcript.js').then(r=>{if(!r.ok)throw Error();return r.text();}).then(js=>{
       setBookmark('javascript:'+encodeURIComponent(js.replace("'__EXTRACTOR_ORIGIN__'",JSON.stringify(location.origin))));
     }).catch(()=>setStatus('The capture bookmark could not load. Refresh to retry.'));
-    const initial=new URLSearchParams(location.search).get('v');
-    if(initial && /^[\w-]{11}$/.test(initial))setInput('https://www.youtube.com/watch?v='+initial);
   },[]);
   useEffect(()=>{
     function receive(e:MessageEvent){
@@ -80,6 +87,6 @@ export default function Extractor() {
     {cues.length>0 && <div className="transport"><button className="primary" onClick={()=>{
       try {sessionStorage.setItem('extractor:'+id,JSON.stringify(cues));location.assign('/?watch='+id);}catch{setStatus('Browser storage is full. Download the SRT instead.');}
     }}>Use in companion</button><button onClick={save}>Download SRT</button></div>}
-    <p><a href="/">Back to movie companion</a></p>
+    <p><Link href="/">Back to movie companion</Link></p>
   </section></main>;
 }
