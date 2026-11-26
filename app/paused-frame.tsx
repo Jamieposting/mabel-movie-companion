@@ -87,7 +87,11 @@ export default function PausedFrame({read,target}:{read:()=>PausedScene|null;tar
         if(valid()) {
           const res=await fetch('/api/frame',{cache:'no-store',signal});
           if(!res.ok) throw Error('Frame relay unavailable. Check preview sign-in.');
-          const ticket=await res.json() as {nonce?:string;publicKey?:JsonWebKey;retrieved?:string};
+          const ticket=await res.json() as {nonce?:string;publicKey?:JsonWebKey;retrieved?:string;confirm?:string};
+          if(sent && ticket.confirm===sent && valid()) {
+            const ack=await fetch('/api/frame',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({confirm:sent}),signal});
+            if(!ack.ok) throw Error('Frame confirmation expired.');
+          }
           if(sent && ticket.retrieved===sent) {setRetrieved(true);report('MCP server retrieved the upload. Confirm what ChatGPT actually saw in chat.');return;}
           if(ticket.nonce && ticket.publicKey && !sent && valid()) {
             const sealed=await sealFrame(ticket.publicKey,jpeg);

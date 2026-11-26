@@ -6,6 +6,7 @@ export async function GET(req:Request) {
   if(!owner) return send({},401);
   const row=await readTicket(await bucket(),'frame/'+owner);
   if(row?.ticket.retrieved) return send({retrieved:row.ticket.nonce});
+  if(row?.ticket.confirm && !row.ticket.reply) return send({confirm:row.ticket.nonce});
   if(!row?.ticket.publicKey || row.ticket.reply) return send({});
   return send({nonce:row.ticket.nonce,publicKey:row.ticket.publicKey});
 }
@@ -17,6 +18,13 @@ export async function POST(req:Request) {
   if(raw.length>600000) return send({},413);
   let b;
   try { b=JSON.parse(raw); } catch {return send({},400);}
+  if(typeof b?.confirm==='string') {
+    const db=await bucket(), key='frame/'+owner;
+    const row=await readTicket(db,key);
+    if(!row?.ticket.confirm || row.ticket.reply || row.ticket.nonce!==b.confirm) return send({},409);
+    const saved=await db.put(key,JSON.stringify({...row.ticket,reply:true}),{onlyIf:{etagMatches:row.etag}});
+    return send({},saved?200:409);
+  }
   if(!b || typeof b.nonce!=='string' || !b.sealed || typeof b.sealed.cipher!=='string' ||
      b.sealed.key?.length!==344 || b.sealed.iv?.length!==16 || !Number.isFinite(b.metadata?.scene?.positionSeconds) ||
      !Array.isArray(b.metadata.scene.dialogue) || b.metadata.scene.dialogue.length>48 ||
