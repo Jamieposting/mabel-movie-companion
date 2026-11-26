@@ -1327,21 +1327,13 @@ export default function Home() {
     };
   }, [checkpoint, publishVisualReactions, releaseObservation, waitForObservationWake]);
 
-  useEffect(() => {
-    const id = new URLSearchParams(location.search).get('watch');
-    if (id && /^[\w-]{11}$/.test(id)) {
-      openSource({kind:'youtube',url:'https://www.youtube.com/watch?v='+id,videoId:id});
-      history.replaceState(null,'',location.pathname);
-    }
-  }, []);
-
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     try { openSource(parseVideoSource(videoUrl)); }
     catch (err) { setError((err as Error).message); }
   }
 
-  function openSource(parsedSource: VideoSource) {
+  const openSource = useCallback((parsedSource: VideoSource) => {
     try {
       framesAllowed.current=false;setFramesEnabled(false);pendingSeek.current=null;
       const sessionId = `media-${Date.now()}-${mediaSessionSequenceRef.current++}`;
@@ -1370,7 +1362,15 @@ export default function Home() {
     } catch (submissionError) {
       setError(submissionError instanceof Error ? submissionError.message : 'Unable to open this link.');
     }
-  }
+  }, [releaseObservation]);
+
+  useEffect(() => {
+    const id = new URLSearchParams(location.search).get('watch');
+    if (id && /^[\w-]{11}$/.test(id)) {
+      openSource({kind:'youtube',url:'https://www.youtube.com/watch?v='+id,videoId:id});
+      history.replaceState(null,'',location.pathname);
+    }
+  }, [openSource]);
 
   function reset() {
     if (source?.url.startsWith('blob:')) URL.revokeObjectURL(source.url);

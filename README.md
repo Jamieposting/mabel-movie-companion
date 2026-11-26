@@ -18,6 +18,26 @@ npm run dev
 
 Open the loopback address printed by the development server. Choose **Watch on another screen**, then **Try sample subtitles**. Seek to three seconds for one completed cue, twelve seconds for two, then back to three for one. You can also import the synthetic fixture in `tests/practice.srt`. Run `npm run build` to build the production Worker and client assets.
 
+## Test the draft on Android Chrome over USB
+
+This tests the branch on a physical tablet without publishing a Site. On a computer with Git, Node 24, npm and Android SDK Platform-Tools, run:
+
+```sh
+git clone --branch feature/multimodal-scene-awareness https://github.com/Jamieposting/mabel-movie-companion.git mabel-android-test
+cd mabel-android-test
+cp .openai/hosting.example.json .openai/hosting.json
+npm ci
+npm run dev -- --port 4173
+```
+
+Leave that terminal running. Enable USB debugging on the tablet, connect it by USB, unlock it and approve the computer. In a second terminal run `adb devices` (the tablet should say `device`), then `adb reverse tcp:4173 tcp:4173`. Open **http://127.0.0.1:4173/?watch=cLHTe_ORjLc** in Chrome on the tablet. Repeat with **http://127.0.0.1:4173/?watch=M7lc1UVf-VE**, Google's IFrame API sample video.
+
+1. Tap Play **inside YouTube**. Before seeking, check for moving footage and watch both the YouTube elapsed time and Scene companion clock advance several seconds. A title, duration or changing YouTube subtitle alone does not confirm playback.
+2. For Professor Dave, load the existing matching vidIQ JSON if the private hosted cache is unavailable locally. Pause after a completed line. Compare the two clocks, seek to 00:00:22, then rewind. Once settled, the scene should contain only completed lines at each new position. During buffering the companion can report an unavailable clock.
+3. With frame sharing enabled, inspect **Browser frame checkpoint**. This checks the tablet UI and clock. A checkpoint alone contains no image. Verifying delivery also requires a host with screenshot access to that same tab and a successful pair of before/after checks. USB forwarding does not connect the cloud ChatGPT browser to the tablet. The hosted MCP dialogue relay requires the authenticated Site described below.
+
+When finished, run `adb reverse --remove tcp:4173`, stop the server with Ctrl+C, and disable USB debugging if you enabled it for this test.
+
 ## Connect the hosted companion
 
 1. Create your own authenticated OpenAI Site with Worker hosting. Put its assigned `project_id` in your local `.openai/hosting.json`, keeping the template's `r2` binding (`BUCKET`) and `mcp` capability. The local config is ignored by Git. Deploy the build with that config using the Sites publishing workflow.
@@ -66,7 +86,7 @@ Each screenshot is bracketed by clock checks. The host returns the earlier dialo
 | --- | --- |
 | Desktop browser | The player exposes checkpoints. An ordinary standalone tab also needs a browser-capable host to perform a crop. |
 | ChatGPT Work browser | A single browser operation in the existing conversation returned a visible speaker and elephants with the first completed line at 7.000 s in *Me at the zoo*, using the Wikimedia-hosted WebM copy of the YouTube video and its published English subtitles. The proof used the visible scene panel; this browser did not advertise WebMCP. |
-| YouTube iframe | Two real embeds loaded in the Work browser. The test returned black pixels or a spinner; after one seek the displayed caption changed while the reported clock lagged. In a subsequent desktop Work test with video `cLHTe_ORjLc`, the real iframe loaded its title and 1:06:48 duration. After Play and a seek to 22 seconds, the scene checkpoint returned an unavailable time, zero completed cues and no frame. Absolute Seek and Play remained usable. The iframe did not yield a verified moving frame paired with completed dialogue. |
+| YouTube iframe | Two real embeds loaded in the Work browser. The test returned black pixels or a spinner; after one seek the displayed caption changed while the reported clock lagged. In a subsequent desktop Work test with video `cLHTe_ORjLc`, the real iframe loaded its title and 1:06:48 duration. After Play and a seek to 22 seconds, the scene checkpoint returned an unavailable time, zero completed cues and no frame. Absolute Seek and Play remained usable. A follow-up tested native Play before any seek on this video and Google’s reference video M7lc1UVf-VE. Both reported elapsed time 0, HTML media readyState 0 and videoWidth 0 after Play. A plain iframe containing the reference video, without React or the application’s IFrame API integration, reproduced the stall. No underlying delivery or decoder error was identified. A paired observation of decoded YouTube footage remains unverified. |
 | Android | Existing dialogue relay remains available with the player visible. Player-only screenshots and sustained observation have not been verified on a physical device. |
 | Ordinary ChatGPT conversation | The existing authenticated MCP tool returns a fresh text scene. No automatic screenshot path was demonstrated for a host without a browser handle. |
 | ChatGPT Voice | Device screen sharing, where available, is a separate user-controlled feature. Synchronisation with these checkpoints and automatic Voice observations remain unverified. |
