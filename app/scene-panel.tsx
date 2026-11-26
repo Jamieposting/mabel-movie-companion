@@ -7,13 +7,14 @@ import { inCommentaryGap, parseSubtitles, scene, type Cue, type Style } from './
 
 export type SceneReader = (before?: number, tool?: boolean) => unknown;
 type Props = {
+  visual?: (scene:unknown)=>unknown;
   youtubeId?: string; duration: () => number|null;
   readTime: () => number | null; seek: (t: number) => void; toggle: () => void;
   playing: boolean; manual: boolean; title: string; reader: MutableRefObject<SceneReader | null>;
 };
 export function stamp(t: number) { return new Date(Math.floor(t % 86400) * 1000).toISOString().slice(11,19); }
 const sample = '1\n00:00:00,000 --> 00:00:02,000\nI left the brass key in the biscuit tin.\n\n2\n00:00:09,000 --> 00:00:11,000\nThe spare is under the red clock.';
-export default function ScenePanel({ youtubeId, duration, readTime, seek, toggle, playing, manual, title, reader }: Props) {
+export default function ScenePanel({ visual, youtubeId, duration, readTime, seek, toggle, playing, manual, title, reader }: Props) {
   const [film, setFilm] = useState('');
   const [cues, setCues] = useState<Cue[]>([]);
   const [offset, setOffset] = useState(0);
@@ -117,6 +118,9 @@ export default function ScenePanel({ youtubeId, duration, readTime, seek, toggle
     <label>Go to <input aria-label="Go to time" value={jump} onChange={e=>setJump(e.target.value)}/></label><button disabled={time===null} onClick={()=>{if (/^(?:\d+:)?[0-5]?\d:[0-5]\d$/.test(jump)) seek(jump.split(':').reduce((s,x)=>60*s+Number(x),0)); else setNote('Enter mm:ss or hh:mm:ss.');}}>Seek</button></div>
     <p role="status">{note} {cues.length ? ' · '+current.completed+(current.completed===1?' completed cue':' completed cues') : ' · No subtitles loaded'}</p>
     <blockquote>{current.dialogue.at(-1)?.line ?? 'Completed dialogue will appear here.'}</blockquote>
+    {visual && <details><summary>Browser frame checkpoint</summary>
+      <textarea readOnly aria-label="Browser frame checkpoint" value={JSON.stringify({scene:current,frame:visual(current)})} />
+    </details>}
     <LiveSwitch reader={reader} />
     <p>{lastRead ? 'A host tool read scene context at '+lastRead+'.' : bridge==='ready' ? 'Site tools available. Waiting for a host to read this scene.' : 'You can also share a scene manually.'}</p>
     {current.commentaryOpportunity && <p>A good moment to ask Mabel.</p>}

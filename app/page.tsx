@@ -9,6 +9,7 @@ import {
   useState,
 } from 'react';
 
+import {playerClip, type FrameCheckpoint} from './visual-observation';
 import ScenePanel, { type SceneReader, stamp } from './scene-panel';
 import { manualClock } from './manual-clock';
 
@@ -31,7 +32,7 @@ const REACTION_EMOJIS = [
   '🎉',
   '😬',
 ] as const;
-const OBSERVATION_INTERVALS_SECONDS = [5, 10, 15] as const;
+const OBSERVATION_INTERVALS_SECONDS = [5, 10, 15, 30] as const;
 const DEFAULT_OBSERVATION_INTERVAL_SECONDS = 5;
 const VIEWER_REACTION_COOLDOWN_MS = 3_000;
 const MAX_AGENT_REACTIONS = 5;
@@ -41,7 +42,7 @@ const WATCH_PROTOCOL = {
   userIntent:
     'The user decides what kind of company they want. Follow their current request; watching together does not require a fixed amount of commentary or reactions.',
   observation:
-    'When asked to follow along, use watch_observe_next_moment while playback is active. With imported subtitles, use the returned scene and skip screen captures. Answer direct questions with watch_get_scene even when paused. End the loop on request or when playback stops.',
+    'When asked to follow along, use watch_observe_next_moment while playback is active. When the viewer enables frame sharing and asks you to watch, use the scene and frame checkpoint together. Immediately crop the player and validate against a fresh watch_read_checkpoint in the same browser operation. Discard stale or blank frames. Answer direct questions with watch_get_scene even when paused. End the loop on request or when playback stops.',
   behavior: [
     'Read the scene.mode and scene.commentaryOpportunity fields. Answer direct questions at any time. For unsolicited remarks, wait for commentaryOpportunity and a meaningful moment. Use watch_get_scene for dialogue questions.',
     'Do not comment on every observation.',
@@ -95,6 +96,7 @@ type PlaybackSnapshot = {
 
 type PlayerController = {
   read: () => number | null;
+  visual?: () => {status:string;rate:number} | null;
   seek: (time: number) => void;
   play: () => Promise<boolean>;
   pause: () => Promise<boolean>;
@@ -166,6 +168,7 @@ type YouTubePlayer = {
   getCurrentTime: () => number;
   getDuration: () => number;
   getPlayerState: () => number;
+  getPlaybackRate: () => number;
   destroy: () => void;
 };
 
@@ -450,6 +453,11 @@ function YouTubeSurface({
               player = event.target;
               controllerRef.current = {
                 read: () => player?.getCurrentTime() ?? null,
+                visual: () => {
+                  if (!player) return null;
+                  const status=youtubeStatus(player.getPlayerState());
+                  return {status,rate:player.getPlaybackRate()};
+                },
                 seek: time => player?.seekTo(time, true),
                 play: async () => {
                   player?.playVideo();
@@ -501,7 +509,7 @@ function DirectVideoSurface({
   const report = useCallback(() => {
     const video = videoRef.current;
     if (!video) return;
-    const status: PlaybackStatus = video.ended
+    const status: PlaybackStatus = video.seeking ? 'loading' : video.ended
       ? 'ended'
       : video.paused
         ? video.readyState >= 2
@@ -520,6 +528,11 @@ function DirectVideoSurface({
   useEffect(() => {
     controllerRef.current = {
       read: () => videoRef.current && videoRef.current.readyState >= 1 && !videoRef.current.error ? videoRef.current.currentTime : null,
+      visual: () => {
+        const v=videoRef.current;
+        if (!v || v.seeking || v.readyState<2 || !v.videoWidth || v.mediaKeys || v.error) return null;
+        return {status:v.ended?'ended':v.paused?'paused':'playing',rate:v.playbackRate};
+      },
       seek: time => { if (videoRef.current && videoRef.current.readyState >= 1) videoRef.current.currentTime = time; },
       play: async () => {
         const video = videoRef.current;
@@ -666,6 +679,29 @@ export default function Home() {
   const observationCursorRef = useRef<ObservationCursor | null>(null);
   const playbackSampleRef = useRef<PlaybackSample | null>(null);
   const playbackDiscontinuitySequenceRef = useRef(0);
+  const [framesEnabled,setFramesEnabled]=useState(false);
+  const framesAllowed=useRef(false);
+  const pendingSeek=useRef<number|null>(null);
+  const playerFrame=useRef<HTMLDivElement>(null);
+  const checkpoint=useCallback((scene:unknown):FrameCheckpoint|null=>{
+    const position=(scene as {positionSeconds?:number|null} | null)?.positionSeconds;
+    const session=mediaMetadataRef.current?.sessionId;
+    const details=controllerRef.current?.visual?.();
+    const target=playerFrame.current;
+    if (!framesAllowed.current || !target || document.visibilityState!=='visible' ||
+        !session || !details || !['playing','paused','ended'].includes(details.status) ||
+        typeof position!=='number' || !Number.isFinite(position) || pendingSeek.current!==null) return null;
+    const clip=playerClip(target.getBoundingClientRect(),innerWidth,innerHeight);
+    if (!clip) return null;
+    return {session,epoch:playbackDiscontinuitySequenceRef.current,sampledAt:Date.now(),
+      rate:details.rate,status:details.status,clip,pixelRatio:devicePixelRatio,
+      scene:scene as FrameCheckpoint['scene']};
+  },[]);
+  function seekPlayer(seconds:number) {
+    playbackDiscontinuitySequenceRef.current++;
+    pendingSeek.current=seconds;
+    controllerRef.current?.seek(seconds);
+  }
   const reactionMenuRef = useRef<HTMLDivElement>(null);
   const lastViewerReactionAtRef = useRef(0);
   const viewerReactionCooldownTimerRef = useRef<number | null>(null);
@@ -764,18 +800,20 @@ export default function Home() {
     const current = { ...previous, ...next };
     const sampledAt = performance.now();
 
+    if (current.status !== previous.status) playbackDiscontinuitySequenceRef.current++;
     if (current.currentTime !== null) {
+      if (pendingSeek.current!==null && Math.abs(current.currentTime-pendingSeek.current)<0.5 &&
+          ['playing','paused','ended'].includes(current.status)) pendingSeek.current=null;
       const previousSample = playbackSampleRef.current;
       if (
         previousSample &&
-        previousSample.sourceUrl === current.sourceUrl &&
-        previous.status === 'playing' &&
-        current.status === 'playing'
+        previousSample.sourceUrl === current.sourceUrl
       ) {
         const wallDeltaSeconds = Math.max(0, (sampledAt - previousSample.sampledAt) / 1_000);
         const mediaDeltaSeconds = current.currentTime - previousSample.mediaTime;
         const largestExpectedAdvance = Math.max(2, wallDeltaSeconds * 4 + 1);
-        if (mediaDeltaSeconds < -1 || mediaDeltaSeconds > largestExpectedAdvance) {
+        const pausedSeek = previous.status === 'paused' && current.status === 'paused' && mediaDeltaSeconds !== 0;
+        if (pausedSeek || mediaDeltaSeconds < -0.05 || mediaDeltaSeconds > largestExpectedAdvance) {
           playbackDiscontinuitySequenceRef.current += 1;
         }
       }
@@ -875,6 +913,7 @@ export default function Home() {
 
   const waitForObservationWake = useCallback(
     (startPlaybackTime: number, targetPlaybackTime: number) => {
+      const initialEpoch = playbackDiscontinuitySequenceRef.current;
       const queuedSignal = pendingSignalsRef.current.shift();
       if (queuedSignal) {
         return Promise.resolve<ObservationWake>({
@@ -900,6 +939,7 @@ export default function Home() {
 
           const current = playbackRef.current;
           if (
+            playbackDiscontinuitySequenceRef.current !== initialEpoch ||
             current.status !== 'playing' ||
             current.currentTime === null ||
             current.currentTime < startPlaybackTime - 1 ||
@@ -943,7 +983,13 @@ export default function Home() {
       additionalProperties: false,
     };
 
+    const readCheckpoint=(notify=false)=>{
+      const scene=sceneReader.current?.(undefined,notify);
+      return {scene,frame:checkpoint(scene)};
+    };
     const tools: WebMcpTool[] = [
+      {name:'watch_read_checkpoint',description:'Read the current completed scene and opt-in frame crop, including when paused. Bracket the player-only browser screenshot with this tool and validate media range, epoch, source, geometry and freshness before returning pixels.',
+        inputSchema:noInputSchema,annotations:{readOnlyHint:true},execute:()=>readCheckpoint()},
       {
         name: 'watch_get_scene',
         description: 'Read completed dialogue and current position in this tab. For earlier completed dialogue pass the previous result’s earlierBefore as before. Use this for questions even while paused.',
@@ -1097,7 +1143,7 @@ export default function Home() {
 
           return {
             ok: true,
-            scene: sceneReader.current?.(undefined,true),
+            ...readCheckpoint(true),
             observation: {
               id: observationId,
               capturedAt,
@@ -1251,7 +1297,7 @@ export default function Home() {
       }
       delete document.documentElement.dataset.siteTools;
     };
-  }, [publishVisualReactions, releaseObservation, waitForObservationWake]);
+  }, [checkpoint, publishVisualReactions, releaseObservation, waitForObservationWake]);
 
   useEffect(() => {
     const id = new URLSearchParams(location.search).get('watch');
@@ -1269,6 +1315,7 @@ export default function Home() {
 
   function openSource(parsedSource: VideoSource) {
     try {
+      framesAllowed.current=false;setFramesEnabled(false);pendingSeek.current=null;
       const sessionId = `media-${Date.now()}-${mediaSessionSequenceRef.current++}`;
       const nextMetadata = initialMediaMetadata(parsedSource, sessionId);
       const nextPlayback: PlaybackSnapshot = {
@@ -1279,6 +1326,7 @@ export default function Home() {
         duration: null,
         controllable: false,
       };
+      releaseObservation({reason:'cancelled'});
       playbackRef.current = nextPlayback;
       playbackSampleRef.current = null;
       playbackDiscontinuitySequenceRef.current = 0;
@@ -1369,7 +1417,7 @@ export default function Home() {
       </header>
 
       <section className="watch-stage" aria-label="Shared video">
-        <div className="player-frame">
+        <div className="player-frame" ref={playerFrame}>
           <PlayerSurface
             source={source}
             controllerRef={controllerRef}
@@ -1389,8 +1437,11 @@ export default function Home() {
           </div>
         </div>
 
-        <ScenePanel key={source.url} youtubeId={source.kind==='youtube'?source.videoId:undefined} duration={()=>playbackRef.current.duration} title={mediaMetadata?.title || (source.kind === 'manual' ? 'Untitled film' : 'Shared video')} reader={sceneReader} readTime={readTime}
-          seek={t => controllerRef.current?.seek(t)} toggle={()=>{const c=controllerRef.current; if(c) void (playbackStatus==='playing'?c.pause():c.play());}}
+        {(source.kind==='youtube' || source.kind==='direct') && <label><input type="checkbox" checked={framesEnabled} onChange={e=>{
+          framesAllowed.current=e.target.checked;setFramesEnabled(e.target.checked);playbackDiscontinuitySequenceRef.current++;
+        }}/> Share player frames with this browser companion (experimental)</label>}
+        <ScenePanel visual={framesEnabled?checkpoint:undefined} key={source.url} youtubeId={source.kind==='youtube'?source.videoId:undefined} duration={()=>playbackRef.current.duration} title={mediaMetadata?.title || (source.kind === 'manual' ? 'Untitled film' : 'Shared video')} reader={sceneReader} readTime={readTime}
+          seek={seekPlayer} toggle={()=>{const c=controllerRef.current; if(c) void (playbackStatus==='playing'?c.pause():c.play());}}
           playing={playbackStatus==='playing'} manual={source.kind==='manual'} />
         <div className="watch-controls">
           <div className="reaction-picker-shell" ref={reactionMenuRef}>
